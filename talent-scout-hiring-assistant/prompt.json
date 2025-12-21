@@ -1,0 +1,23 @@
+{
+  "greeting": "👋 Hi! TalentScout AI. I'll ask 7 questions then 3 tech questions. Type 'exit' to stop.",
+  
+  "questions": [
+    "What is your full name?",
+    "What is your email address?", 
+    "What is your phone number? (10 digits)",
+    "How many years of experience? (0-50)",
+    "What position are you applying for?",
+    "Where are you currently located?",
+    "What is your tech stack? (Python, React, AWS)"
+  ],
+  
+  "tech_prompt": "ROLE: You are a technical hiring assistant for TalentScout recruitment agency.\nTASK: Generate 3 technical interview questions.\nCONTEXT: Candidate has {experience} years experience. Tech stack: {tech_stack}.\nINSTRUCTIONS:\n1. Create exactly 3 questions\n2. Questions should test practical skills\n3. Number them 1,2,3\n4. Difficulty matches experience level\n\nQUESTIONS:",
+  
+  "fallback": [
+    "Explain your main project",
+    "Python list vs tuple?",
+    "What is Git workflow?"
+  ],
+  
+  "farewell": "✅ Complete! Team will contact you soon."
+}
