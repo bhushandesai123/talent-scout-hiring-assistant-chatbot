@@ -177,4 +177,3 @@ with st.expander("Candidate Information (Preview)"):
 
 st.markdown("---")
 st.caption("PG-AGI AI/ML Intern Screening System | TalentScout AI Assistant")
-ubuntu@ip-10-0-2-43:~/talent-scout$ 
