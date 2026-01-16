@@ -1,270 +1,180 @@
+import os
+os.environ["LANGCHAIN_VERBOSE"] = "false"
+
 import streamlit as st
-import re, json
 from decouple import config
 from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
+st.set_page_config(page_title="TalentScout AI", layout="wide")
+st.title("🤖 TalentScout AI - PG-AGI")
 
-# PAGE SET
-
-st.set_page_config(page_title="TalentScout", page_icon="🤖", layout="centered")
-st.title("🤖 TalentScout Hiring Assistant")
-
-
-# LOADING UR PROMPTS.JSON
-with open("prompts.json", "r") as f:
-    PROMPTS = json.load(f)
-
-
-
-# LLM I CALL BY LANGCHAIN CODE WE GOT FROM LANGCHAIN SITE FOR HUGGINGFACE
-key = config("HUGGINGFACEHUB_API_TOKEN")
-repo_id = "meta-llama/Llama-3.1-8B-Instruct"
-
-llm = HuggingFaceEndpoint(
-    repo_id=repo_id,
-    temperature=0.7,
-    max_new_tokens=300,
-    huggingfacehub_api_token=key
+# Load ChatHuggingFace
+token = config("HUGGINGFACEHUB_API_TOKEN")
+endpoint = HuggingFaceEndpoint(
+    repo_id="mistralai/Mistral-7B-Instruct-v0.2",
+    huggingfacehub_api_token=token,
+    temperature=0.1,
+    max_new_tokens=250,
+    task="conversational"
 )
-model = ChatHuggingFace(llm=llm)
+llm = ChatHuggingFace(llm=endpoint)
 
+# === FIXED SEQUENTIAL QUESTIONING SYSTEM ===
+QUESTIONS_SEQUENCE = [
+    "Hello! Welcome to PG-AGI AI/ML Intern screening. What is your FULL NAME?",
+    "Thank you. What is your EMAIL ADDRESS?",
+    "Perfect. What is your PHONE NUMBER?",
+    "Great. What is your CURRENT LOCATION?",
+    "Excellent. How many YEARS OF EXPERIENCE do you have?",
+    "Understood. What POSITION are you applying for?",
+    "Perfect. List your TECH STACK (Python/Django/AWS/K8s/React/Docker etc):"
+]
 
+TECH_QUESTION_PROMPT = """You are a technical interviewer. Based on the candidate's tech stack: {tech_stack}
+Generate ONE technical question about {tech_area}. Make it relevant to an AI/ML Intern position.
+Format: Just the question, no extra text."""
 
+SYSTEM_PROMPT = """You are PG-AGI TalentScout AI for AI/ML Intern position.
+Your role is to ask questions sequentially and generate relevant technical questions based on tech stack.
 
-# SESSION STATE = SO WE GET ALL HISTORY I ASKED TO NEW USER, USER I/P I GET HERE
-if "step" not in st.session_state:
+RULES:
+1. Follow the EXACT question sequence provided
+2. After tech stack is provided, ask technical questions one by one
+3. Keep responses concise and professional
+4. Always maintain conversation flow
+5. End with closing message after 3 technical questions"""
+
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": QUESTIONS_SEQUENCE[0]}
+    ]
     st.session_state.step = 0
-    st.session_state.name = ""
-    st.session_state.email = ""
-    st.session_state.phone = ""
-    st.session_state.exp = ""
-    st.session_state.job = ""
-    st.session_state.city = ""
-    st.session_state.tech = ""
-    st.session_state.questions = []
-    st.session_state.current_q = 0
-    st.session_state.answers = {}
-    st.session_state.screening_ended = False
-    st.session_state.greet_shown = False
+    st.session_state.tech_stack = ""
+    st.session_state.tech_questions_asked = 0
+    st.session_state.tech_areas = ["Python programming", "ML/AI concepts", "Data structures/algorithms"]
 
-# VALIDATION HELPERS WE GET FROM INTERNET DIRECT COPY
-def check_exit(text: str) -> bool:
-    return text.lower().strip() in ["exit", "quit", "bye", "goodbye", "stop", "end", "cancel"]
+# Store candidate info
+if "candidate_info" not in st.session_state:
+    st.session_state.candidate_info = {
+        "name": "", "email": "", "phone": "", "location": "",
+        "experience": "", "position": "", "tech_stack": ""
+    }
 
-def validate_name(name: str) -> bool:
-    return len(name.strip()) >= 2 and name.replace(" ", "").isalpha()
-
-def validate_email(email: str) -> bool:
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return re.match(pattern, email.strip()) is not None
-
-def validate_phone(phone: str) -> bool:
-    digits = re.sub(r"\D", "", phone)
-    return len(digits) == 10
-
-def validate_exp(exp: str) -> bool:
-    return exp.isdigit() and 0 <= int(exp) <= 50
-
-def validate_general(text: str) -> bool:
-    return len(text.strip()) >= 2
-
-
-
-
-
-# LLM QUESTION GENERATOR
-def generate_questions(tech: str, exp: str):
-    try:
-        prompt = PROMPTS["tech_prompt"].format(experience=exp, tech_stack=tech)
-        response = model.invoke(prompt)
-        questions = []
-        for line in response.content.split("\n"):
-            line = line.strip()
-            if line.startswith(("1.", "2.", "3.")):
-                q = line.split(".", 1)[1].strip()
-                questions.append(q)
-        return questions[:3] if questions else PROMPTS["fallback"]
-    except Exception:
-        return PROMPTS["fallback"]
-
-# GREETING - MY ASSIGNMENT THEY WANT THIS SO .....
-if not st.session_state.greet_shown:
-    st.chat_message("assistant").write(PROMPTS["greeting"])
-    st.session_state.greet_shown = True
-
-# EXIT - my app wants to exit,if i say some exit relatedc words
-if st.session_state.screening_ended:
-    st.chat_message("assistant").write(PROMPTS["farewell"])
-    if st.button("🔄 Start New Screening"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-    st.stop()
-
-# STEP 0–6: collect info i want from user
-if st.session_state.step == 0:
-    # Name
-    st.chat_message("assistant").write(PROMPTS["questions"][0])
-    user_input = st.chat_input("Full name...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_name(user_input):
-            st.session_state.name = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 1
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a valid full name.")
-
-elif st.session_state.step == 1:
-    # Email
-    st.chat_message("assistant").write(PROMPTS["questions"][1])
-    user_input = st.chat_input("Email address...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_email(user_input):
-            st.session_state.email = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 2
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a valid email (name@example.com).")
-
-elif st.session_state.step == 2:
-    # Phone
-    st.chat_message("assistant").write(PROMPTS["questions"][2])
-    user_input = st.chat_input("Phone number...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_phone(user_input):
-            st.session_state.phone = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 3
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a 10-digit phone number.")
-
-elif st.session_state.step == 3:
-    # Experience
-    st.chat_message("assistant").write(PROMPTS["questions"][3])
-    user_input = st.chat_input("Years of experience...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_exp(user_input):
-            st.session_state.exp = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 4
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a number between 0 and 50.")
-
-elif st.session_state.step == 4:
-    # Position
-    st.chat_message("assistant").write(PROMPTS["questions"][4])
-    user_input = st.chat_input("Desired position...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_general(user_input):
-            st.session_state.job = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 5
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a valid position.")
-
-elif st.session_state.step == 5:
-    # Location
-    st.chat_message("assistant").write(PROMPTS["questions"][5])
-    user_input = st.chat_input("Current location...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_general(user_input):
-            st.session_state.city = user_input
-            st.chat_message("user").write(user_input)
-            st.session_state.step = 6
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a valid location.")
-
-elif st.session_state.step == 6:
-    # Tech Stack
-    st.chat_message("assistant").write(PROMPTS["questions"][6])
-    user_input = st.chat_input("Tech stack...")
-    if user_input:
-        if check_exit(user_input):
-            st.session_state.screening_ended = True
-            st.rerun()
-        if validate_general(user_input):
-            st.session_state.tech = user_input
-            st.chat_message("user").write(user_input)
-            # Generate questions now
-            st.session_state.questions = generate_questions(user_input, st.session_state.exp)
-            st.chat_message("assistant").write(f"✅ Generated {len(st.session_state.questions)} technical questions.")
-            st.session_state.step = 7
-            st.rerun()
-        else:
-            st.chat_message("assistant").write("❌ Please enter a valid tech stack.")
-
-# STEP 7: ASK 1 by 1 question to user
-elif st.session_state.step == 7:
-    total = len(st.session_state.questions)
-    current = st.session_state.current_q
-
-    if current < total:
-        st.progress((current + 1) / total)
-        question = st.session_state.questions[current]
-        st.chat_message("assistant").write(f"**Technical Question {current + 1}/{total}:** {question}")
-        answer = st.text_area("Your answer:", height=120, key=f"tech_q_{current}")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Submit & Next", type="primary"):
-                if answer.strip():
-                    st.session_state.answers[current] = answer
-                    st.session_state.current_q += 1
-                    st.rerun()
-                else:
-                    st.warning("Please enter an answer or use Skip.")
-        with col2:
-            if st.button("⏭️ Skip"):
-                st.session_state.current_q += 1
-                st.rerun()
-    else:
-        st.session_state.step = 8
-        st.rerun()
-
-# STEP 8: SUMMARY 
-elif st.session_state.step == 8:
-    st.balloons()
-    st.success("🎉 Screening Complete!")
-
-    st.markdown("### 📋 Candidate Summary")
+# Sidebar - Progress tracker
+with st.sidebar:
+    total_steps = len(QUESTIONS_SEQUENCE) + 3  # 7 info + 3 tech questions
+    current_step = st.session_state.step + st.session_state.tech_questions_asked
+    st.progress(min(current_step / total_steps, 1.0))
+    
     col1, col2 = st.columns(2)
     with col1:
-        st.write(f"**Name:** {st.session_state.name}")
-        st.write(f"**Email:** {st.session_state.email}")
-        st.write(f"**Phone:** {st.session_state.phone}")
+        st.metric("Info Step", st.session_state.step + 1, 7)
     with col2:
-        st.write(f"**Experience:** {st.session_state.exp} years")
-        st.write(f"**Position:** {st.session_state.job}")
-        st.write(f"**Location:** {st.session_state.city}")
-        st.write(f"**Tech Stack:** {st.session_state.tech}")
+        st.metric("Tech Q", st.session_state.tech_questions_asked, 3)
+    
+    st.info("💡 Answer each question sequentially")
+    
+    if st.session_state.tech_stack:
+        st.success(f"Tech Stack: {st.session_state.tech_stack}")
 
-    st.caption(f"Answered {len(st.session_state.answers)}/{len(st.session_state.questions)} technical questions.")
+# Display chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-    if st.button("🔄 Start New Screening"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+# Function to get next question
+def get_next_question():
+    """Determine the next question based on current state"""
+    
+    # If we're still in info gathering phase
+    if st.session_state.step < len(QUESTIONS_SEQUENCE):
+        # Update candidate info based on last response
+        if st.session_state.step > 0 and st.session_state.messages:
+            user_messages = [m for m in st.session_state.messages if m["role"] == "user"]
+            if len(user_messages) >= st.session_state.step:
+                last_answer = user_messages[-1]["content"]
+                
+                # Map step to info field
+                if st.session_state.step == 1:  # Name
+                    st.session_state.candidate_info["name"] = last_answer
+                elif st.session_state.step == 2:  # Email
+                    st.session_state.candidate_info["email"] = last_answer
+                elif st.session_state.step == 3:  # Phone
+                    st.session_state.candidate_info["phone"] = last_answer
+                elif st.session_state.step == 4:  # Location
+                    st.session_state.candidate_info["location"] = last_answer
+                elif st.session_state.step == 5:  # Experience
+                    st.session_state.candidate_info["experience"] = last_answer
+                elif st.session_state.step == 6:  # Position
+                    st.session_state.candidate_info["position"] = last_answer
+                elif st.session_state.step == 7:  # Tech Stack
+                    st.session_state.candidate_info["tech_stack"] = last_answer
+                    st.session_state.tech_stack = last_answer
+        
+        return QUESTIONS_SEQUENCE[st.session_state.step]
+    
+    # If we're in technical questioning phase
+    elif st.session_state.tech_questions_asked < 3:
+        if st.session_state.tech_stack:
+            # Use LLM to generate technical question
+            tech_area = st.session_state.tech_areas[st.session_state.tech_questions_asked]
+            prompt = TECH_QUESTION_PROMPT.format(
+                tech_stack=st.session_state.tech_stack,
+                tech_area=tech_area
+            )
+            
+            messages = [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=prompt)
+            ]
+            
+            response = llm.invoke(messages)
+            question = f"**TECH QUESTION {st.session_state.tech_questions_asked + 1}**: {response.content.strip()}"
+            return question
+        else:
+            return "Please list your tech stack first so I can ask relevant technical questions."
+    
+    # All questions completed
+    else:
+        return "**SCREENING COMPLETE**: Thank you for your time! The PG-AGI team will review your responses and contact you within 48 hours."
+
+# Handle user input
+if user_input := st.chat_input("Type your answer here..."):
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    
+    # Check for exit commands
+    exit_commands = ["bye", "exit", "stop", "quit", "end"]
+    if any(cmd in user_input.lower() for cmd in exit_commands):
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": "Thank you for your time! The screening session has ended. Have a great day!"
+        })
         st.rerun()
+    
+    # Determine next step
+    if st.session_state.step < len(QUESTIONS_SEQUENCE):
+        # Move to next info question
+        if st.session_state.step == 6 and user_input:  # After tech stack
+            st.session_state.tech_stack = user_input
+        
+        st.session_state.step += 1
+    elif st.session_state.tech_questions_asked < 3:
+        # Move to next tech question
+        st.session_state.tech_questions_asked += 1
+    
+    # Get and add next question
+    next_question = get_next_question()
+    st.session_state.messages.append({"role": "assistant", "content": next_question})
+    
+    st.rerun()
+
+# Display candidate info summary (for debugging/verification)
+with st.expander("Candidate Information (Preview)"):
+    st.json(st.session_state.candidate_info)
+
+st.markdown("---")
+st.caption("PG-AGI AI/ML Intern Screening System | TalentScout AI Assistant")
+ubuntu@ip-10-0-2-43:~/talent-scout$ 
